@@ -1,0 +1,69 @@
+#!/bin/bash
+# Source: https://superuser.com/a/1330590/117820
+# Source: https://superuser.com/a/1356803/117820
+# Source: https://www.linuxuprising.com/2019/04/how-to-remove-old-snap-versions-to-free.html
+set -o pipefail
+shopt -qs nullglob
+
+: ${SUDO:=sudo}; [ $EUID -eq 0 ] && SUDO=''
+
+printUsage()
+{
+    cat <<HELPTEXT
+Remove all old versions of installed snaps.
+HELPTEXT
+    echo
+    printf 'Usage: %q %s\n' "$(basename "$1")" '[-n|--dry-run] [-?|-h|--help]'
+}
+
+action=purgeSnaps
+case "$1" in
+    --help|-h|-\?)	shift; printUsage "$0"; exit 0;;
+    --dry-run|-n)	shift; action=printSnaps;;
+    --root-execute)	shift
+			let snapCnt=0
+			status=
+			while [ $# -gt 1 ]
+			do
+			    snapname="${1:?}"; shift
+			    version="${1:?}"; shift
+			    revision="${1:?}"; shift
+			    snap remove "$snapname" --revision="$revision" && : ${status:=0} || status=$?
+			    let snapCnt+=1
+			done
+			rm /var/lib/snapd/cache/*
+			snapCntPlural=s; [ $snapCnt -eq 1 ] && snapCntPlural=
+			printf '\nRemoved %d old snap%s.\n' $snapCnt "$snapCntPlural"
+			exit ${status:-99}
+			;;
+esac
+if [ $# -ne 0 ]; then
+    printUsage "$0" >&2
+    exit 2
+fi
+
+printSnaps()
+{
+    printf '%s\t%s\t%s\n' "$@" \
+	| column -s $'\t' -t
+}
+
+purgeSnaps()
+{
+    exec withDiskUsageDelta \
+	    --for /var/lib/snapd/snaps \
+	    --for /var/lib/snapd/cache \
+	    --include-absolute -- \
+		$SUDO "${BASH_SOURCE[0]}" --root-execute "$@"
+}
+
+typeset -a oldSnaps=()
+while IFS=' ' read -r snapname ver rev trk pub notes
+do
+    [[ ",${notes}," =~ ,disabled, ]] \
+	&& oldSnaps+=("$snapname" "$ver" "$rev")
+done < <(LANG=C snap list --all)
+
+[ ${#oldSnaps[@]} -gt 0 ] || exit 99
+
+$action "${oldSnaps[@]}"
